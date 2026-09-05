@@ -30,6 +30,11 @@ import { runWithSwitchGuard } from '@/modules/antigravity-runtime/switch/switchG
 import { executeSwitchFlow } from '@/modules/antigravity-runtime/switch/switchFlow';
 import { getCurrentAccountInfo } from '@/modules/account/public';
 import type { AntigravityAppTarget } from '@/shared/platform/antigravityAppTarget';
+import {
+  getWslActiveAccountEmail,
+  getWslStandaloneRefreshToken,
+  isWslHostAvailable,
+} from '@/shared/platform/wslPlatform';
 import type { DeviceProfile, DeviceProfilesSnapshot } from '@/modules/identity-profile/types';
 import {
   classifyAccountStatusFromError,
@@ -404,6 +409,18 @@ export async function listCloudAccounts(): Promise<CloudAccount[]> {
     : CloudAccountSettingsStore.getActiveAccountIdForTarget('ide');
   const activeAgyAccountId = CloudAccountSettingsStore.getActiveAccountIdForTarget('agy');
 
+  let wslEmail = '';
+  let wslStandaloneRefreshToken = '';
+  if (isWslHostAvailable()) {
+    try {
+      wslEmail = normalizeAccountEmail(getWslActiveAccountEmail());
+      wslStandaloneRefreshToken = getWslStandaloneRefreshToken();
+    } catch (err) {
+      logger.warn('Failed to read WSL active account email during listing', err);
+    }
+  }
+  const activeWslAccountId = CloudAccountSettingsStore.getActiveAccountIdForTarget('wsl');
+
   return accounts.map((account) => {
     const accountEmail = normalizeAccountEmail(account.email);
     const isClassicActive =
@@ -413,12 +430,25 @@ export async function listCloudAccounts(): Promise<CloudAccount[]> {
     const isIdeActive =
       ideEmail === accountEmail || (!!activeIdeAccountId && activeIdeAccountId === account.id);
     const isAgyActive = activeAgyAccountId === account.id;
+    const matchesWslToken = Boolean(
+      wslStandaloneRefreshToken &&
+      account.token?.refresh_token &&
+      account.token.refresh_token.trim() === wslStandaloneRefreshToken,
+    );
+    const isWslActive =
+      matchesWslToken ||
+      (!!wslEmail && wslEmail === accountEmail) ||
+      (!!activeWslAccountId && activeWslAccountId === account.id);
+    if (matchesWslToken && activeWslAccountId !== account.id) {
+      CloudAccountSettingsStore.setActiveForTarget('wsl', account.id);
+    }
     return {
       ...account,
-      is_active: isClassicActive || isIdeActive || isAgyActive,
+      is_active: isClassicActive || isIdeActive || isAgyActive || isWslActive,
       is_active_classic: isClassicActive,
       is_active_ide: isIdeActive,
       is_active_agy: isAgyActive,
+      is_active_wsl: isWslActive,
     };
   });
 }

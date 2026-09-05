@@ -5,6 +5,11 @@ import { execSync } from 'child_process';
 import findProcess, { type ProcessInfo } from 'find-process';
 import type { AntigravityAppTarget } from '@/shared/platform/antigravityAppTarget';
 import { resolveAntigravityAppTarget } from '@/shared/platform/antigravityAppTarget';
+import {
+  getWslAntigravityDbPaths,
+  getWslAntigravityExecutable,
+  getWslAntigravityStoragePaths,
+} from '@/shared/platform/wslPlatform';
 
 type PathApi = Pick<typeof path, 'dirname' | 'join' | 'normalize' | 'resolve'>;
 
@@ -749,6 +754,10 @@ export function getAntigravityDbPaths(
   target?: AntigravityAppTarget | null,
   options?: PathResolutionOptions,
 ): string[] {
+  if (resolveAntigravityAppTarget(target) === 'wsl') {
+    return getWslAntigravityDbPaths();
+  }
+
   const appData = getAppDataDir(target, options);
   const paths: string[] = [];
   const home = os.homedir();
@@ -813,6 +822,10 @@ export function getAntigravityStoragePaths(
   target?: AntigravityAppTarget | null,
   options?: PathResolutionOptions,
 ): string[] {
+  if (resolveAntigravityAppTarget(target) === 'wsl') {
+    return getWslAntigravityStoragePaths();
+  }
+
   const appData = getAppDataDir(target, options);
   const paths: string[] = [];
   const home = os.homedir();
@@ -887,6 +900,10 @@ export function getAntigravityExecutablePath(
   options?: PathResolutionOptions,
 ): string {
   const resolvedTarget = resolveAntigravityAppTarget(target);
+  if (resolvedTarget === 'wsl') {
+    return getWslAntigravityExecutable() || '';
+  }
+
   const executableName = getAntigravityAppFolderName(target);
   const runningExecutablePath = getExecutablePathFromRunningProcess(target);
 

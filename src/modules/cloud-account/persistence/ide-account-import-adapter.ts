@@ -1,4 +1,6 @@
 import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { eq } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
@@ -139,6 +141,27 @@ export class IdeAccountImportAdapter {
   }
 
   static readTokenInfoFromPath(dbPath: string): IdeTokenInfo {
+    if (dbPath.startsWith('\\\\wsl.localhost\\')) {
+      const tempDbPath = path.join(
+        os.tmpdir(),
+        `agm_wsl_sync_${Date.now()}_${Math.random().toString(36).slice(2)}.vscdb`,
+      );
+      try {
+        fs.copyFileSync(dbPath, tempDbPath);
+        return this.readTokenInfoFromPath(tempDbPath);
+      } catch (error) {
+        logger.debug('Failed to read WSL state.vscdb via temporary snapshot during sync', error);
+      } finally {
+        try {
+          if (fs.existsSync(tempDbPath)) {
+            fs.unlinkSync(tempDbPath);
+          }
+        } catch {
+          // ignore cleanup error
+        }
+      }
+    }
+
     let lastError: unknown;
     for (let attempt = 1; attempt <= SQLITE_MAX_RETRIES; attempt += 1) {
       const { raw, orm } = getIdeDb(dbPath, true);

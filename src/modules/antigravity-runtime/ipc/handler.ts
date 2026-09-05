@@ -21,6 +21,11 @@ import {
   killWindowsImageTree,
   queryWindowsProcessesByImageName,
 } from '@/shared/platform/windowsProcess';
+import {
+  closeWslAntigravity,
+  isWslAntigravityRunning,
+  startWslAntigravity,
+} from '@/shared/platform/wslPlatform';
 
 const execAsync = promisify(exec);
 const PROCESS_STARTUP_TIMEOUT_MS = 6000;
@@ -359,6 +364,10 @@ async function findClosableTargetProcesses(
  */
 export async function isProcessRunning(target?: AntigravityAppTarget | null): Promise<boolean> {
   try {
+    if (resolveAntigravityAppTarget(target) === 'wsl') {
+      return isWslAntigravityRunning();
+    }
+
     if (process.platform === 'win32') {
       const isRunning = await isAnyWindowsTargetImageRunning(target);
       if (isRunning !== null) {
@@ -411,6 +420,11 @@ export async function isProcessRunning(target?: AntigravityAppTarget | null): Pr
  */
 export async function closeAntigravity(target?: AntigravityAppTarget | null): Promise<void> {
   const resolvedTarget = resolveAntigravityAppTarget(target);
+  if (resolvedTarget === 'wsl') {
+    closeWslAntigravity();
+    return;
+  }
+
   const appName = resolvedTarget === 'ide' ? 'Antigravity IDE' : 'Antigravity';
   logger.info(`Closing ${appName}...`);
   const platform = process.platform;
@@ -474,6 +488,14 @@ export async function _waitForProcessExit(
 ): Promise<void> {
   const startTime = Date.now();
   while (Date.now() - startTime < timeoutMs) {
+    if (resolveAntigravityAppTarget(target) === 'wsl') {
+      if (!isWslAntigravityRunning()) {
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, pollInterval));
+      continue;
+    }
+
     if (process.platform === 'win32') {
       const isRunning = await isAnyWindowsTargetImageRunning(target);
       if (isRunning === false) {
@@ -652,6 +674,11 @@ export async function startAntigravity(
   useUri = true,
 ): Promise<void> {
   const resolvedTarget = resolveAntigravityAppTarget(target);
+  if (resolvedTarget === 'wsl') {
+    startWslAntigravity();
+    return;
+  }
+
   const appName = resolvedTarget === 'ide' ? 'Antigravity IDE' : 'Antigravity';
   const configuredArgs = getConfiguredAntigravityArgs(resolvedTarget);
   const shouldUseUri = resolvedTarget === 'classic' && useUri && configuredArgs.length === 0;

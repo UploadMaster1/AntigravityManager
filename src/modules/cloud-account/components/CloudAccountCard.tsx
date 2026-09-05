@@ -228,7 +228,8 @@ export function CloudAccountCard({
   const isActiveAnywhere = !!(
     account.is_active_classic ||
     account.is_active_ide ||
-    account.is_active_agy
+    account.is_active_agy ||
+    account.is_active_wsl
   );
 
   const getQuotaTextColorClass = (percentage: number) => {
@@ -523,7 +524,10 @@ export function CloudAccountCard({
             {account.email}
           </CardDescription>
 
-          {(account.is_active_classic || account.is_active_ide || account.is_active_agy) && (
+          {(account.is_active_classic ||
+            account.is_active_ide ||
+            account.is_active_agy ||
+            account.is_active_wsl) && (
             <div className="mt-1.5 flex flex-wrap gap-1">
               {account.is_active_classic && (
                 <span className="flex items-center gap-1 rounded border border-green-500/20 bg-green-500/10 px-1.5 py-0.5 text-[9px] font-bold text-green-600 dark:text-green-400">
@@ -550,6 +554,15 @@ export function CloudAccountCard({
                     <span className="relative inline-flex h-1 w-1 rounded-full bg-emerald-500"></span>
                   </span>
                   {t('cloud.card.agyLabel', 'Antigravity CLI')}
+                </span>
+              )}
+              {account.is_active_wsl && (
+                <span className="flex items-center gap-1 rounded border border-orange-500/20 bg-orange-500/10 px-1.5 py-0.5 text-[9px] font-bold text-orange-600 dark:text-orange-400">
+                  <span className="relative flex h-1 w-1">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-orange-400 opacity-75"></span>
+                    <span className="relative inline-flex h-1 w-1 rounded-full bg-orange-500"></span>
+                  </span>
+                  {t('cloud.card.wslLabel', 'WSL Antigravity')}
                 </span>
               )}
             </div>
@@ -733,6 +746,21 @@ export function CloudAccountCard({
                     </Badge>
                   )}
                 </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => onSwitch(account.id, 'wsl')}
+                  disabled={isSwitching || account.is_active_wsl}
+                  className="flex cursor-pointer items-center justify-between py-2 text-xs"
+                >
+                  <span className="flex items-center gap-2">
+                    <Terminal className="text-primary h-3.5 w-3.5" />
+                    <span>{t('account.switchToWsl', 'Switch to WSL Antigravity')}</span>
+                  </span>
+                  {account.is_active_wsl && (
+                    <Badge className="h-4 border-none bg-orange-500/20 px-1 text-[9px] font-semibold text-orange-600 hover:bg-orange-500/20">
+                      Active
+                    </Badge>
+                  )}
+                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
@@ -905,7 +933,8 @@ export function CompactCloudAccountCard({
   const isActiveAnywhere = !!(
     account.is_active_classic ||
     account.is_active_ide ||
-    account.is_active_agy
+    account.is_active_agy ||
+    account.is_active_wsl
   );
 
   const getQuotaBarColorClass = (percentage: number) => {
@@ -984,6 +1013,11 @@ export function CompactCloudAccountCard({
           {account.is_active_agy && (
             <span className="rounded border border-emerald-500/20 bg-emerald-500/10 px-1 text-[9px] font-bold text-emerald-600 dark:text-emerald-400">
               CLI
+            </span>
+          )}
+          {account.is_active_wsl && (
+            <span className="rounded border border-orange-500/20 bg-orange-500/10 px-1 text-[9px] font-bold text-orange-600 dark:text-orange-400">
+              WSL
             </span>
           )}
           {validationBlockedStatusLabel && (
@@ -1121,6 +1155,21 @@ export function CompactCloudAccountCard({
                 </span>
                 {account.is_active_agy && (
                   <Badge className="h-4 border-none bg-emerald-500/20 px-1 text-[9px] font-semibold text-emerald-600 hover:bg-emerald-500/20">
+                    Active
+                  </Badge>
+                )}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => onSwitch(account.id, 'wsl')}
+                disabled={isSwitching || account.is_active_wsl}
+                className="flex cursor-pointer items-center justify-between py-2 text-xs"
+              >
+                <span className="flex items-center gap-2">
+                  <Terminal className="text-primary h-3.5 w-3.5" />
+                  <span>{t('account.switchToWsl', 'Switch to WSL Antigravity')}</span>
+                </span>
+                {account.is_active_wsl && (
+                  <Badge className="h-4 border-none bg-orange-500/20 px-1 text-[9px] font-semibold text-orange-600 hover:bg-orange-500/20">
                     Active
                   </Badge>
                 )}

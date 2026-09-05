@@ -78,6 +78,7 @@ export interface CloudAccount {
   is_active_classic?: boolean;
   is_active_ide?: boolean;
   is_active_agy?: boolean;
+  is_active_wsl?: boolean;
   proxy_url?: string;
 }
 
@@ -153,6 +154,7 @@ export const CloudAccountSchema = z.object({
   is_active_classic: z.boolean().optional(),
   is_active_ide: z.boolean().optional(),
   is_active_agy: z.boolean().optional(),
+  is_active_wsl: z.boolean().optional(),
   proxy_url: z.string().optional(),
 });
 

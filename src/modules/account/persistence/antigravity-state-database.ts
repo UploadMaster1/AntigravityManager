@@ -1,5 +1,6 @@
 import Database from 'better-sqlite3';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { eq } from 'drizzle-orm';
 import { isString } from 'lodash-es';
@@ -132,6 +133,27 @@ function readCurrentAccountInfoFromDbPath(
   dbPath: string,
   target?: AntigravityAppTarget | null,
 ): AccountInfo {
+  if (dbPath.startsWith('\\\\wsl.localhost\\')) {
+    const tempDbPath = path.join(
+      os.tmpdir(),
+      `agm_wsl_snapshot_${Date.now()}_${Math.random().toString(36).slice(2)}.vscdb`,
+    );
+    try {
+      fs.copyFileSync(dbPath, tempDbPath);
+      return readCurrentAccountInfoFromDbPath(tempDbPath, target);
+    } catch (error) {
+      logger.debug('Failed to read WSL state.vscdb via temporary snapshot', error);
+    } finally {
+      try {
+        if (fs.existsSync(tempDbPath)) {
+          fs.unlinkSync(tempDbPath);
+        }
+      } catch {
+        // ignore cleanup error
+      }
+    }
+  }
+
   let connection: ReturnType<typeof openDrizzleConnection> | null = null;
   try {
     connection = getDatabaseConnection(dbPath);

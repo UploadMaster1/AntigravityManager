@@ -10,4 +10,9 @@ describe('Antigravity app targets', () => {
     expect(AntigravityAppTargetSchema.safeParse('agy').success).toBe(true);
     expect(resolveAntigravityAppTarget('agy')).toBe('agy');
   });
+
+  it('accepts wsl as a switch target', () => {
+    expect(AntigravityAppTargetSchema.safeParse('wsl').success).toBe(true);
+    expect(resolveAntigravityAppTarget('wsl')).toBe('wsl');
+  });
 });

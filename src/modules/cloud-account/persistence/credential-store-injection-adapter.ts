@@ -1,4 +1,5 @@
 import fs from 'fs';
+import path from 'path';
 import { eq } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { isObjectLike, isString } from 'lodash-es';
@@ -20,7 +21,11 @@ import * as drizzleSchema from '@/shared/persistence/database/schema';
 import { ItemTableValueRowSchema } from '@/shared/persistence/database/types';
 import { parseRow } from '@/shared/persistence/database/sqlite';
 import { ProtobufUtils } from '@/shared/serialization/protobuf';
+import { getWslGeminiPaths } from '@/shared/platform/wslPlatform';
+import { GOOGLE_OAUTH_SCOPE } from '../oauthScopes';
 import { writeAntigravityCredentialStoreToken } from './antigravityCredentialStore';
+import { writeGoogleOAuthCredentials } from './googleOAuthCredentialStore';
+import { writePrivateFileAtomically } from './privateCredentialFile';
 
 const SQLITE_BUSY_CODES = new Set(['SQLITE_BUSY', 'SQLITE_LOCKED']);
 const SQLITE_BUSY_TIMEOUT_MS = 3000;
@@ -270,6 +275,9 @@ export class CredentialStoreInjectionAdapter {
 
   static shouldInjectTokenIntoCredentialStore(appTarget?: AntigravityAppTarget): boolean {
     const resolvedTarget = resolveAntigravityAppTarget(appTarget);
+    if (resolvedTarget === 'wsl') {
+      return false;
+    }
     if (resolvedTarget === 'agy') {
       return true;
     }
@@ -310,6 +318,10 @@ export class CredentialStoreInjectionAdapter {
     name: 'new' | 'old' | 'dual';
     reason: string;
   } {
+    if (resolveAntigravityAppTarget(appTarget) === 'wsl') {
+      return { name: 'dual', reason: 'wsl-dual' };
+    }
+
     try {
       const version = getAntigravityVersion(appTarget);
       return {
@@ -428,6 +440,93 @@ export class CredentialStoreInjectionAdapter {
     }
 
     this.injectCloudToken(account, appTarget);
+    if (resolveAntigravityAppTarget(appTarget) === 'wsl') {
+      try {
+        const wslGemini = getWslGeminiPaths();
+        if (wslGemini) {
+          writeGoogleOAuthCredentials(
+            {
+              access_token: account.token.access_token,
+              refresh_token: account.token.refresh_token,
+              expiry_timestamp: account.token.expiry_timestamp,
+              id_token: account.token.id_token,
+              email: account.email,
+            },
+            { geminiDir: wslGemini.geminiDir },
+          );
+
+          const profileDir = path.join(wslGemini.profilesDir, account.email);
+          const profileOauthPath = path.join(profileDir, 'oauth_creds.json');
+          const expiryDate =
+            account.token.expiry_timestamp > 10_000_000_000
+              ? account.token.expiry_timestamp
+              : account.token.expiry_timestamp * 1000;
+          const oauthPayload = JSON.stringify(
+            {
+              access_token: account.token.access_token,
+              refresh_token: account.token.refresh_token,
+              token_type: 'Bearer',
+              expiry_date: expiryDate,
+              ...(account.token.id_token !== undefined ? { id_token: account.token.id_token } : {}),
+              scope: GOOGLE_OAUTH_SCOPE,
+            },
+            null,
+            2,
+          );
+          try {
+            writePrivateFileAtomically(profileOauthPath, oauthPayload);
+          } catch (profileErr) {
+            logger.debug('Failed to write WSL auth profile cache', profileErr);
+          }
+
+          const cliPayload = JSON.stringify({
+            token: {
+              access_token: account.token.access_token,
+              token_type: 'Bearer',
+              refresh_token: account.token.refresh_token,
+              expiry: new Date(account.token.expiry_timestamp * 1000)
+                .toISOString()
+                .replace(/\.(\d{3})Z$/, '.$1000Z'),
+            },
+            auth_method: 'consumer',
+          });
+          try {
+            writePrivateFileAtomically(wslGemini.cliTokenPath, cliPayload);
+          } catch (cliErr) {
+            logger.debug('Failed to write WSL CLI token', cliErr);
+          }
+
+          try {
+            writePrivateFileAtomically(wslGemini.standaloneTokenPath, cliPayload);
+            logger.info(`Wrote WSL standalone token to ${wslGemini.standaloneTokenPath}`);
+          } catch (standaloneErr) {
+            logger.warn('Failed to write WSL standalone token', standaloneErr);
+          }
+
+          try {
+            if (!fs.existsSync(wslGemini.antigravityDir)) {
+              fs.mkdirSync(wslGemini.antigravityDir, { recursive: true });
+            }
+            const pbtxtContent = `post_onboarding: {\n  completed_steps: POST_ONBOARDING_STEP_TYPE_MANAGER_WELCOME\n  completed_steps: POST_ONBOARDING_STEP_TYPE_USAGE_MODE\n  completed_steps: POST_ONBOARDING_STEP_TYPE_AGENT_CONFIGURATION\n  completed_steps: POST_ONBOARDING_STEP_TYPE_ADD_WORKSPACE\n}\nagent_onboarding_completed: AGENT_ONBOARDING_STATE_COMPLETED\n`;
+            if (!fs.existsSync(wslGemini.antigravityStatePbPath)) {
+              writePrivateFileAtomically(wslGemini.antigravityStatePbPath, pbtxtContent);
+            } else {
+              const currentPbtxt = fs.readFileSync(wslGemini.antigravityStatePbPath, 'utf-8');
+              if (!currentPbtxt.includes('AGENT_ONBOARDING_STATE_COMPLETED')) {
+                writePrivateFileAtomically(
+                  wslGemini.antigravityStatePbPath,
+                  currentPbtxt + '\nagent_onboarding_completed: AGENT_ONBOARDING_STATE_COMPLETED\n',
+                );
+              }
+            }
+          } catch (pbtxtErr) {
+            logger.debug('Failed to update WSL antigravity_state.pbtxt', pbtxtErr);
+          }
+        }
+      } catch (error) {
+        logger.warn('Failed to sync WSL Gemini credential files', error);
+      }
+    }
     return 'sqlite';
   }
 }

@@ -242,6 +242,13 @@ export function CloudAccountToolbar({
           >
             {t('cloud.syncFromAntigravityIde', 'Antigravity IDE')}
           </DropdownMenuItem>
+          <DropdownMenuItem
+            className="cursor-pointer"
+            disabled={isSyncPending}
+            onClick={() => onSyncLocal('wsl')}
+          >
+            {t('cloud.syncFromWsl', 'WSL Antigravity')}
+          </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
 
