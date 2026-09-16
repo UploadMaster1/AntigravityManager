@@ -11,6 +11,10 @@ import {
   getAntigravityDbPaths,
   getAntigravityStoragePaths,
 } from '@/shared/platform/paths';
+import {
+  isSqliteBusyError,
+  withLocalDatabasePath,
+} from '@/shared/persistence/database/sqlite';
 
 const GLOBAL_BASELINE_FILE = 'device_original.json';
 const SQLITE_RETRY_COUNT = 3;
@@ -83,19 +87,7 @@ const deviceHardeningState: DeviceHardeningState = {
   lastFailureAt: null,
 };
 
-function isSqliteBusyError(error: unknown): boolean {
-  if (!isObjectLike(error)) {
-    return false;
-  }
-  const candidate = error as { code?: string; message?: string };
-  if (candidate.code === 'SQLITE_BUSY' || candidate.code === 'SQLITE_LOCKED') {
-    return true;
-  }
-  if (isString(candidate.message)) {
-    return candidate.message.includes('SQLITE_BUSY') || candidate.message.includes('SQLITE_LOCKED');
-  }
-  return false;
-}
+
 
 function getExistingPath(paths: string[]): string | null {
   for (const targetPath of paths) {
@@ -228,25 +220,27 @@ function readStateServiceMachineIdValue(dbPath: string): string | null {
     return null;
   }
 
-  let db: Database.Database | null = null;
-  try {
-    db = new Database(dbPath, { readonly: true, fileMustExist: true });
-    db.pragma('busy_timeout = 3000');
-    const row = db
-      .prepare("SELECT value FROM ItemTable WHERE key = 'storage.serviceMachineId' LIMIT 1")
-      .get() as { value?: unknown } | undefined;
-    if (!row || !isString(row.value) || row.value.length === 0) {
+  return withLocalDatabasePath(dbPath, { readonly: true }, (localDbPath) => {
+    let db: Database.Database | null = null;
+    try {
+      db = new Database(localDbPath, { readonly: true, fileMustExist: true });
+      db.pragma('busy_timeout = 3000');
+      const row = db
+        .prepare("SELECT value FROM ItemTable WHERE key = 'storage.serviceMachineId' LIMIT 1")
+        .get() as { value?: unknown } | undefined;
+      if (!row || !isString(row.value) || row.value.length === 0) {
+        return null;
+      }
+      return row.value;
+    } catch (error) {
+      logger.warn('Failed to read state.serviceMachineId from state.vscdb', error);
       return null;
+    } finally {
+      if (db) {
+        db.close();
+      }
     }
-    return row.value;
-  } catch (error) {
-    logger.warn('Failed to read state.serviceMachineId from state.vscdb', error);
-    return null;
-  } finally {
-    if (db) {
-      db.close();
-    }
-  }
+  });
 }
 
 function ensureStorageProfileApplied(profile: DeviceProfile, storagePath: string): void {
@@ -635,28 +629,30 @@ export function syncStateServiceMachineIdValue(
     fs.mkdirSync(targetDbDir, { recursive: true });
   }
 
-  for (let attempt = 1; attempt <= SQLITE_RETRY_COUNT; attempt += 1) {
-    let db: Database.Database | null = null;
-    try {
-      db = new Database(targetDbPath);
-      db.pragma('busy_timeout = 3000');
-      db.exec('CREATE TABLE IF NOT EXISTS ItemTable (key TEXT PRIMARY KEY, value TEXT);');
-      writeStateStorageServiceMachineIdValue(db, serviceMachineId);
-      return;
-    } catch (error) {
-      if (isSqliteBusyError(error) && attempt < SQLITE_RETRY_COUNT) {
-        logger.warn(`state.vscdb busy, retrying (${attempt}/${SQLITE_RETRY_COUNT})`, error);
-        continue;
-      }
-      throw error;
-    } finally {
-      if (db) {
-        db.close();
+  withLocalDatabasePath(targetDbPath, { readonly: false }, (localDbPath) => {
+    for (let attempt = 1; attempt <= SQLITE_RETRY_COUNT; attempt += 1) {
+      let db: Database.Database | null = null;
+      try {
+        db = new Database(localDbPath);
+        db.pragma('busy_timeout = 3000');
+        db.exec('CREATE TABLE IF NOT EXISTS ItemTable (key TEXT PRIMARY KEY, value TEXT);');
+        writeStateStorageServiceMachineIdValue(db, serviceMachineId);
+        return;
+      } catch (error) {
+        if (isSqliteBusyError(error) && attempt < SQLITE_RETRY_COUNT) {
+          logger.warn(`state.vscdb busy, retrying (${attempt}/${SQLITE_RETRY_COUNT})`, error);
+          continue;
+        }
+        throw error;
+      } finally {
+        if (db) {
+          db.close();
+        }
       }
     }
-  }
 
-  throw new Error('sync_state_service_machine_id_failed');
+    throw new Error('sync_state_service_machine_id_failed');
+  });
 }
 
 export function syncTelemetryServiceMachineIdValue(
@@ -674,28 +670,30 @@ export function syncTelemetryServiceMachineIdValue(
     fs.mkdirSync(targetDbDir, { recursive: true });
   }
 
-  for (let attempt = 1; attempt <= SQLITE_RETRY_COUNT; attempt += 1) {
-    let db: Database.Database | null = null;
-    try {
-      db = new Database(targetDbPath);
-      db.pragma('busy_timeout = 3000');
-      db.exec('CREATE TABLE IF NOT EXISTS ItemTable (key TEXT PRIMARY KEY, value TEXT);');
-      writeStateTelemetryServiceMachineIdValue(db, serviceMachineId);
-      return;
-    } catch (error) {
-      if (isSqliteBusyError(error) && attempt < SQLITE_RETRY_COUNT) {
-        logger.warn(`state.vscdb busy, retrying (${attempt}/${SQLITE_RETRY_COUNT})`, error);
-        continue;
-      }
-      throw error;
-    } finally {
-      if (db) {
-        db.close();
+  withLocalDatabasePath(targetDbPath, { readonly: false }, (localDbPath) => {
+    for (let attempt = 1; attempt <= SQLITE_RETRY_COUNT; attempt += 1) {
+      let db: Database.Database | null = null;
+      try {
+        db = new Database(localDbPath);
+        db.pragma('busy_timeout = 3000');
+        db.exec('CREATE TABLE IF NOT EXISTS ItemTable (key TEXT PRIMARY KEY, value TEXT);');
+        writeStateTelemetryServiceMachineIdValue(db, serviceMachineId);
+        return;
+      } catch (error) {
+        if (isSqliteBusyError(error) && attempt < SQLITE_RETRY_COUNT) {
+          logger.warn(`state.vscdb busy, retrying (${attempt}/${SQLITE_RETRY_COUNT})`, error);
+          continue;
+        }
+        throw error;
+      } finally {
+        if (db) {
+          db.close();
+        }
       }
     }
-  }
 
-  throw new Error('sync_state_service_machine_id_failed');
+    throw new Error('sync_state_service_machine_id_failed');
+  });
 }
 
 export function applyDeviceProfile(

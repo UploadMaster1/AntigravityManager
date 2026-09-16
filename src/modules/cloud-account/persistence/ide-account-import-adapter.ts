@@ -17,7 +17,11 @@ import { openDrizzleConnection } from '@/shared/persistence/database/dbConnectio
 import { itemTable } from '@/shared/persistence/database/schema';
 import * as drizzleSchema from '@/shared/persistence/database/schema';
 import { ItemTableValueRowSchema } from '@/shared/persistence/database/types';
-import { parseRow } from '@/shared/persistence/database/sqlite';
+import {
+  isSqliteBusyError,
+  parseRow,
+  withLocalDatabasePath,
+} from '@/shared/persistence/database/sqlite';
 import { ProtobufUtils } from '@/shared/serialization/protobuf';
 import { CloudAccountRepo } from './cloudHandler';
 import { resolveImportedTokenLifetime } from './ide-token-lifetime';
@@ -35,19 +39,7 @@ type DrizzleExecutor = Pick<
   'insert' | 'update' | 'delete' | 'select'
 >;
 
-function isSqliteBusyError(error: unknown): boolean {
-  if (!isObjectLike(error)) {
-    return false;
-  }
-  const err = error as { code?: string; message?: string };
-  if (err.code && SQLITE_BUSY_CODES.has(err.code)) {
-    return true;
-  }
-  if (isString(err.message)) {
-    return err.message.includes('SQLITE_BUSY') || err.message.includes('SQLITE_LOCKED');
-  }
-  return false;
-}
+
 
 function sleepSync(ms: number): void {
   const buffer = new SharedArrayBuffer(4);
@@ -141,45 +133,26 @@ export class IdeAccountImportAdapter {
   }
 
   static readTokenInfoFromPath(dbPath: string): IdeTokenInfo {
-    if (dbPath.startsWith('\\\\wsl.localhost\\')) {
-      const tempDbPath = path.join(
-        os.tmpdir(),
-        `agm_wsl_sync_${Date.now()}_${Math.random().toString(36).slice(2)}.vscdb`,
-      );
-      try {
-        fs.copyFileSync(dbPath, tempDbPath);
-        return this.readTokenInfoFromPath(tempDbPath);
-      } catch (error) {
-        logger.debug('Failed to read WSL state.vscdb via temporary snapshot during sync', error);
-      } finally {
+    return withLocalDatabasePath(dbPath, { readonly: true }, (localDbPath) => {
+      let lastError: unknown;
+      for (let attempt = 1; attempt <= SQLITE_MAX_RETRIES; attempt += 1) {
+        const { raw, orm } = getIdeDb(localDbPath, true);
         try {
-          if (fs.existsSync(tempDbPath)) {
-            fs.unlinkSync(tempDbPath);
+          return this.readTokenInfoFromDb(orm);
+        } catch (error) {
+          lastError = error;
+          if (isSqliteBusyError(error) && attempt < SQLITE_MAX_RETRIES) {
+            logger.warn(`SQLite busy, retrying IDE read (attempt ${attempt})`, error);
+            sleepSync(SQLITE_RETRY_DELAY_MS);
+            continue;
           }
-        } catch {
-          // ignore cleanup error
+          throw error;
+        } finally {
+          raw.close();
         }
       }
-    }
-
-    let lastError: unknown;
-    for (let attempt = 1; attempt <= SQLITE_MAX_RETRIES; attempt += 1) {
-      const { raw, orm } = getIdeDb(dbPath, true);
-      try {
-        return this.readTokenInfoFromDb(orm);
-      } catch (error) {
-        lastError = error;
-        if (isSqliteBusyError(error) && attempt < SQLITE_MAX_RETRIES) {
-          logger.warn(`SQLite busy, retrying IDE read (attempt ${attempt})`, error);
-          sleepSync(SQLITE_RETRY_DELAY_MS);
-          continue;
-        }
-        throw error;
-      } finally {
-        raw.close();
-      }
-    }
-    throw lastError;
+      throw lastError;
+    });
   }
 
   private static readEnterpriseProjectIdFromDb(db: DrizzleExecutor): string | undefined {

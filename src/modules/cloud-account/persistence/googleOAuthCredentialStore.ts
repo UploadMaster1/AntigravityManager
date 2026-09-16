@@ -6,10 +6,13 @@ import type { CredentialStoreTokenInput } from '@/shared/auth/credentialStoreTok
 import { GOOGLE_OAUTH_SCOPE } from '../oauthScopes';
 import { writePrivateFileAtomically } from './privateCredentialFile';
 
-const GoogleAccountsFileSchema = z.object({
-  active: z.string().nullable(),
-  old: z.array(z.string()),
-});
+const GoogleAccountsFileSchema = z
+  .object({
+    active: z.string().nullable().optional().default(null),
+    old: z.array(z.string()).optional().default([]),
+    accounts: z.array(z.string()).optional(),
+  })
+  .passthrough();
 
 export interface GoogleOAuthCredentialInput extends CredentialStoreTokenInput {
   email: string;
@@ -75,13 +78,23 @@ function buildNextGoogleAccounts(
   current: z.infer<typeof GoogleAccountsFileSchema>,
   email: string,
 ): z.infer<typeof GoogleAccountsFileSchema> {
-  const old = current.old.filter((candidate) => candidate !== email);
+  const currentOld = Array.isArray(current.old) ? current.old : [];
+  const old = currentOld.filter((candidate) => candidate !== email);
   if (current.active && current.active !== email && !old.includes(current.active)) {
     old.push(current.active);
   }
 
-  return {
+  const result: z.infer<typeof GoogleAccountsFileSchema> = {
+    ...current,
     active: email,
     old,
   };
+
+  if (Array.isArray(current.accounts)) {
+    const accounts = current.accounts.filter((candidate) => candidate !== email);
+    accounts.unshift(email);
+    result.accounts = accounts;
+  }
+
+  return result;
 }

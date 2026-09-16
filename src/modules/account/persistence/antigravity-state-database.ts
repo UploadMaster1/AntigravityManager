@@ -9,7 +9,7 @@ import type { AntigravityAppTarget } from '@/shared/platform/antigravityAppTarge
 import { ItemTableValueRowSchema, type ItemTableKey } from '@/shared/persistence/database/types';
 import { logger } from '@/shared/logging/logger';
 import { getAntigravityDbPaths } from '@/shared/platform/paths';
-import { parseRow } from '@/shared/persistence/database/sqlite';
+import { parseRow, withLocalDatabasePath } from '@/shared/persistence/database/sqlite';
 import { ProtobufUtils } from '@/shared/serialization/protobuf';
 import { openDrizzleConnection } from '@/shared/persistence/database/dbConnection';
 import { itemTable } from '@/shared/persistence/database/schema';
@@ -68,23 +68,25 @@ function ensureDatabaseExists(dbPath: string): void {
     fs.mkdirSync(dir, { recursive: true });
   }
 
-  let db: Database.Database | null = null;
-  try {
-    db = new Database(dbPath);
-    // NOTE Initialize schema
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS ItemTable (
-        key TEXT PRIMARY KEY,
-        value TEXT
-      )
-    `);
-    logger.info('Created new database with ItemTable schema.');
-  } catch (error) {
-    logger.error('Failed to create new database', error);
-    throw error;
-  } finally {
-    if (db) db.close();
-  }
+  withLocalDatabasePath(dbPath, { readonly: false }, (localDbPath) => {
+    let db: Database.Database | null = null;
+    try {
+      db = new Database(localDbPath);
+      // NOTE Initialize schema
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS ItemTable (
+          key TEXT PRIMARY KEY,
+          value TEXT
+        )
+      `);
+      logger.info('Created new database with ItemTable schema.');
+    } catch (error) {
+      logger.error('Failed to create new database', error);
+      throw error;
+    } finally {
+      if (db) db.close();
+    }
+  });
 }
 
 /**
@@ -133,30 +135,10 @@ function readCurrentAccountInfoFromDbPath(
   dbPath: string,
   target?: AntigravityAppTarget | null,
 ): AccountInfo {
-  if (dbPath.startsWith('\\\\wsl.localhost\\')) {
-    const tempDbPath = path.join(
-      os.tmpdir(),
-      `agm_wsl_snapshot_${Date.now()}_${Math.random().toString(36).slice(2)}.vscdb`,
-    );
+  return withLocalDatabasePath(dbPath, { readonly: true }, (localDbPath) => {
+    let connection: ReturnType<typeof openDrizzleConnection> | null = null;
     try {
-      fs.copyFileSync(dbPath, tempDbPath);
-      return readCurrentAccountInfoFromDbPath(tempDbPath, target);
-    } catch (error) {
-      logger.debug('Failed to read WSL state.vscdb via temporary snapshot', error);
-    } finally {
-      try {
-        if (fs.existsSync(tempDbPath)) {
-          fs.unlinkSync(tempDbPath);
-        }
-      } catch {
-        // ignore cleanup error
-      }
-    }
-  }
-
-  let connection: ReturnType<typeof openDrizzleConnection> | null = null;
-  try {
-    connection = getDatabaseConnection(dbPath);
+      connection = getDatabaseConnection(localDbPath);
     const { orm } = connection;
     const contextPrefix = `${target ?? 'default'}.itemTable`;
 
@@ -256,6 +238,7 @@ function readCurrentAccountInfoFromDbPath(
       connection.raw.close();
     }
   }
+  });
 }
 
 /**
@@ -402,36 +385,38 @@ function restoreSingleDatabase(dbPath: string, backup: AccountBackupData): boole
   }
 
   logger.info(`Restoring database: ${dbPath}`);
-  let connection: ReturnType<typeof openDrizzleConnection> | null = null;
+  return withLocalDatabasePath(dbPath, { readonly: false }, (localDbPath) => {
+    let connection: ReturnType<typeof openDrizzleConnection> | null = null;
 
-  try {
-    connection = getDatabaseConnection(dbPath);
-    const { orm } = connection;
-    orm.transaction((tx) => {
-      // NOTE Only restore the keys that were backed up
-      for (const key of KEYS_TO_BACKUP) {
-        if (key in backup.data) {
-          const value = backup.data[key];
-          const stringValue = isString(value) ? value : JSON.stringify(value);
-          tx.insert(itemTable)
-            .values({ key, value: stringValue })
-            .onConflictDoUpdate({
-              target: itemTable.key,
-              set: { value: stringValue },
-            })
-            .run();
-          logger.debug(`Restored key: ${key}`);
+    try {
+      connection = getDatabaseConnection(localDbPath);
+      const { orm } = connection;
+      orm.transaction((tx) => {
+        // NOTE Only restore the keys that were backed up
+        for (const key of KEYS_TO_BACKUP) {
+          if (key in backup.data) {
+            const value = backup.data[key];
+            const stringValue = isString(value) ? value : JSON.stringify(value);
+            tx.insert(itemTable)
+              .values({ key, value: stringValue })
+              .onConflictDoUpdate({
+                target: itemTable.key,
+                set: { value: stringValue },
+              })
+              .run();
+            logger.debug(`Restored key: ${key}`);
+          }
         }
+      });
+      logger.info(`Database restoration complete: ${dbPath}`);
+      return true;
+    } catch (error) {
+      logger.error(`Failed to restore database: ${dbPath}`, error);
+      return false;
+    } finally {
+      if (connection) {
+        connection.raw.close();
       }
-    });
-    logger.info(`Database restoration complete: ${dbPath}`);
-    return true;
-  } catch (error) {
-    logger.error(`Failed to restore database: ${dbPath}`, error);
-    return false;
-  } finally {
-    if (connection) {
-      connection.raw.close();
     }
-  }
+  });
 }

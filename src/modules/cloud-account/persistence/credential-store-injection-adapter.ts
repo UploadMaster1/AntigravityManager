@@ -19,7 +19,11 @@ import { openDrizzleConnection } from '@/shared/persistence/database/dbConnectio
 import { itemTable } from '@/shared/persistence/database/schema';
 import * as drizzleSchema from '@/shared/persistence/database/schema';
 import { ItemTableValueRowSchema } from '@/shared/persistence/database/types';
-import { parseRow } from '@/shared/persistence/database/sqlite';
+import {
+  isSqliteBusyError,
+  parseRow,
+  withLocalDatabasePath,
+} from '@/shared/persistence/database/sqlite';
 import { ProtobufUtils } from '@/shared/serialization/protobuf';
 import { getWslGeminiPaths } from '@/shared/platform/wslPlatform';
 import { GOOGLE_OAUTH_SCOPE } from '../oauthScopes';
@@ -37,19 +41,7 @@ type DrizzleExecutor = Pick<
   'insert' | 'update' | 'delete' | 'select'
 >;
 
-function isSqliteBusyError(error: unknown): boolean {
-  if (!isObjectLike(error)) {
-    return false;
-  }
-  const err = error as { code?: string; message?: string };
-  if (err.code && SQLITE_BUSY_CODES.has(err.code)) {
-    return true;
-  }
-  if (isString(err.message)) {
-    return err.message.includes('SQLITE_BUSY') || err.message.includes('SQLITE_LOCKED');
-  }
-  return false;
-}
+
 
 function sleepSync(ms: number): void {
   const buffer = new SharedArrayBuffer(4);
@@ -358,53 +350,55 @@ export class CredentialStoreInjectionAdapter {
     account: CloudAccount,
     appTarget?: AntigravityAppTarget,
   ): { strategy: string; attempts: number } {
-    let lastError: unknown;
-    for (let attempt = 1; attempt <= SQLITE_MAX_RETRIES; attempt += 1) {
-      const { raw, orm } = getIdeDb(dbPath, false);
-      try {
-        const { name, reason } = this.resolveInjectionStrategy(orm, appTarget);
-        if (name === 'dual') {
-          let newInjected = false;
-          let oldInjected = false;
+    return withLocalDatabasePath(dbPath, { readonly: false }, (localDbPath) => {
+      let lastError: unknown;
+      for (let attempt = 1; attempt <= SQLITE_MAX_RETRIES; attempt += 1) {
+        const { raw, orm } = getIdeDb(localDbPath, false);
+        try {
+          const { name, reason } = this.resolveInjectionStrategy(orm, appTarget);
+          if (name === 'dual') {
+            let newInjected = false;
+            let oldInjected = false;
 
-          try {
-            this.injectNewFormat(orm, account);
-            newInjected = true;
-          } catch (newError) {
-            logger.warn('Failed to inject new format', newError);
+            try {
+              this.injectNewFormat(orm, account);
+              newInjected = true;
+            } catch (newError) {
+              logger.warn('Failed to inject new format', newError);
+            }
+
+            try {
+              this.injectOldFormat(orm, account);
+              oldInjected = true;
+            } catch (oldError) {
+              logger.warn('Failed to inject old format', oldError);
+            }
+
+            if (!newInjected && !oldInjected) {
+              throw new Error('Token injection failed for both formats');
+            }
+
+            return { strategy: `dual:${reason}`, attempts: attempt };
           }
 
-          try {
-            this.injectOldFormat(orm, account);
-            oldInjected = true;
-          } catch (oldError) {
-            logger.warn('Failed to inject old format', oldError);
+          const strategy = this.getStrategy(name);
+          strategy.inject(orm, account);
+          return { strategy: `${strategy.name}:${reason}`, attempts: attempt };
+        } catch (error) {
+          lastError = error;
+          if (isSqliteBusyError(error) && attempt < SQLITE_MAX_RETRIES) {
+            logger.warn(`SQLite busy, retrying injection (attempt ${attempt})`, error);
+            sleepSync(SQLITE_RETRY_DELAY_MS);
+            continue;
           }
-
-          if (!newInjected && !oldInjected) {
-            throw new Error('Token injection failed for both formats');
-          }
-
-          return { strategy: `dual:${reason}`, attempts: attempt };
+          throw error;
+        } finally {
+          raw.close();
         }
-
-        const strategy = this.getStrategy(name);
-        strategy.inject(orm, account);
-        return { strategy: `${strategy.name}:${reason}`, attempts: attempt };
-      } catch (error) {
-        lastError = error;
-        if (isSqliteBusyError(error) && attempt < SQLITE_MAX_RETRIES) {
-          logger.warn(`SQLite busy, retrying injection (attempt ${attempt})`, error);
-          sleepSync(SQLITE_RETRY_DELAY_MS);
-          continue;
-        }
-        throw error;
-      } finally {
-        raw.close();
       }
-    }
 
-    throw lastError;
+      throw lastError;
+    });
   }
 
   static injectCloudToken(account: CloudAccount, appTarget?: AntigravityAppTarget): void {
@@ -444,16 +438,20 @@ export class CredentialStoreInjectionAdapter {
       try {
         const wslGemini = getWslGeminiPaths();
         if (wslGemini) {
-          writeGoogleOAuthCredentials(
-            {
-              access_token: account.token.access_token,
-              refresh_token: account.token.refresh_token,
-              expiry_timestamp: account.token.expiry_timestamp,
-              id_token: account.token.id_token,
-              email: account.email,
-            },
-            { geminiDir: wslGemini.geminiDir },
-          );
+          try {
+            writeGoogleOAuthCredentials(
+              {
+                access_token: account.token.access_token,
+                refresh_token: account.token.refresh_token,
+                expiry_timestamp: account.token.expiry_timestamp,
+                id_token: account.token.id_token,
+                email: account.email,
+              },
+              { geminiDir: wslGemini.geminiDir },
+            );
+          } catch (oauthErr) {
+            logger.warn('Failed to sync WSL Google OAuth credentials', oauthErr);
+          }
 
           const profileDir = path.join(wslGemini.profilesDir, account.email);
           const profileOauthPath = path.join(profileDir, 'oauth_creds.json');

@@ -98,6 +98,13 @@ export function toWslUncPath(distroRoot: string, linuxPath: string): string | nu
   return path.win32.join(distroRoot, normalizedPath.slice(1).replaceAll('/', '\\'));
 }
 
+export function isWslUncPath(targetPath?: string | null): boolean {
+  if (!targetPath) {
+    return false;
+  }
+  return /^[\\/]{2}(?:wsl\.localhost|wsl\$)[\\/]/i.test(targetPath);
+}
+
 export function resolveWslHomeDirectory(distro: string): string | null {
   try {
     const home = execFileSync('wsl.exe', ['-d', distro, '--', 'sh', '-lc', 'printf %s "$HOME"'], {

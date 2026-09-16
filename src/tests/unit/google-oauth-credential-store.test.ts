@@ -151,4 +151,32 @@ describe('writeGoogleOAuthCredentials', () => {
     expect(fs.readFileSync(oauthPath, 'utf-8')).toBe('previous oauth');
     expect(fs.readFileSync(accountsPath, 'utf-8')).toBe('{not json');
   });
+
+  it('handles existing google_accounts.json containing accounts list without old field', () => {
+    fs.writeFileSync(
+      path.join(workDir, 'google_accounts.json'),
+      JSON.stringify({
+        active: 'sarabpalsg2000@gmail.com',
+        accounts: ['sarabpalsg2000@gmail.com'],
+      }),
+    );
+
+    writeGoogleOAuthCredentials(
+      {
+        access_token: 'access-token',
+        refresh_token: 'refresh-token',
+        expiry_timestamp: 1_900_000_000,
+        email: 'tom600411@gmail.com',
+      },
+      { geminiDir: workDir },
+    );
+
+    expect(
+      JSON.parse(fs.readFileSync(path.join(workDir, 'google_accounts.json'), 'utf-8')),
+    ).toEqual({
+      active: 'tom600411@gmail.com',
+      accounts: ['tom600411@gmail.com', 'sarabpalsg2000@gmail.com'],
+      old: ['sarabpalsg2000@gmail.com'],
+    });
+  });
 });
